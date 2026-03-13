@@ -1,0 +1,23 @@
+# Wallpaper Downloader Configuration
+# All fields are optional — only include the ones you want to override.
+
+# Output directory for downloaded wallpapers
+output = "~/Desktop/BasicAppleGuyWallpapers"
+
+# Maximum number of articles to fetch concurrently
+parallel_articles = 3
+
+# Maximum number of images to download concurrently per article
+parallel_images = 2
+
+# Sort images into device subfolders (iPhone/, iPad/, Mac/, Others/)
+device_sort = true
+
+# Sort images into article subfolders
+article_sort = true
+
+# Delay in milliseconds between downloads (respectful scraping)
+delay = 300
+
+# Open the output folder when finished
+open_on_finish = false

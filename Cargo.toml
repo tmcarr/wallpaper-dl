@@ -1,0 +1,17 @@
+[package]
+name = "wallpaper-downloader"
+version = "0.1.0"
+edition = "2021"
+description = "Download and organize wallpapers from Basic Apple Guy"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+shellexpand = "3"
+reqwest = { version = "0.12", features = ["rustls-tls"] }
+scraper = "0.22"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+indicatif = "0.17"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "fs"] }
