@@ -345,7 +345,7 @@ async fn process_article(
             .filter_map(|el| {
                 el.value()
                     .attr("href")
-                    .filter(|h| h.starts_with("/s"))
+                    .filter(|h| h.starts_with("/s/"))
                     .map(String::from)
             })
             .filter(|href| seen.insert(href.clone()))

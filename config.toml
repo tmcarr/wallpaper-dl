@@ -2,7 +2,7 @@
 # All fields are optional — only include the ones you want to override.
 
 # Output directory for downloaded wallpapers
-output = "~/Desktop/BasicAppleGuyWallpapers"
+output = "~/Library/Mobile Documents/com~apple~CloudDocs/BasicAppleGuyWallpapers"
 
 # Maximum number of articles to fetch concurrently
 parallel_articles = 3
