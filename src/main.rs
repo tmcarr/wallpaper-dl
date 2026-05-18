@@ -23,6 +23,8 @@ const HTTP_TIMEOUT_SECS: u64 = 30;
 const BASE_URL: &str = "https://basicappleguy.com";
 const CATEGORY_PATH: &str = "/basicappleblog/category/Wallpaper";
 const PRE_DOWNLOAD_DELAY_MS: u64 = 100;
+const MAX_RETRIES: u32 = 3;
+const RETRY_BASE_DELAY_MS: u64 = 1000;
 
 /// Download wallpapers from Basic Apple Guy
 #[derive(Parser)]
@@ -215,6 +217,21 @@ async fn download_image(client: &Client, url: &str, path: &Path) -> anyhow::Resu
     Ok(())
 }
 
+async fn download_with_retry(client: &Client, url: &str, path: &Path) -> anyhow::Result<()> {
+    let mut last_err = anyhow::anyhow!("no attempts made");
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            let backoff = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
+            sleep(Duration::from_millis(backoff)).await;
+        }
+        match download_image(client, url, path).await {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
 /// Fetch a category page, returning the HTML body.
 /// On failure, returns None if we already have articles (tolerant pagination),
 /// or propagates the error if this is the first page.
@@ -396,71 +413,45 @@ async fn process_article(
     }
 
     let downloaded = Arc::new(AtomicU32::new(0));
-    let mut retry_queue: Vec<(String, PathBuf, String)> = Vec::new();
+    let img_semaphore = Arc::new(Semaphore::new(settings.parallel_images));
+    let mut img_set = JoinSet::new();
 
-    // Run downloads, collecting failures for retry
-    let mut pending = image_tasks;
-    for attempt in 0..2 {
-        let img_semaphore = Arc::new(Semaphore::new(settings.parallel_images));
-        let mut img_set = JoinSet::new();
+    for (download_url, dest, filename) in image_tasks {
+        let permit = img_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .context("image semaphore closed")?;
+        let client = client.clone();
+        let pb = pb.clone();
+        let downloaded = downloaded.clone();
+        let name = name.to_string();
+        let delay_ms = settings.delay;
 
-        let is_retry = attempt > 0;
-        if is_retry && pending.is_empty() {
-            break;
-        }
-        if is_retry {
-            pb.println(format!("  Retrying {} failed downloads...", pending.len()));
-        }
+        img_set.spawn(async move {
+            sleep(Duration::from_millis(PRE_DOWNLOAD_DELAY_MS)).await;
 
-        for (download_url, dest, filename) in pending.drain(..) {
-            let permit = img_semaphore
-                .clone()
-                .acquire_owned()
-                .await
-                .context("image semaphore closed")?;
-            let client = client.clone();
-            let pb = pb.clone();
-            let downloaded = downloaded.clone();
-            let name = name.to_string();
-            let delay_ms = settings.delay;
-
-            img_set.spawn(async move {
-                sleep(Duration::from_millis(PRE_DOWNLOAD_DELAY_MS)).await;
-
-                let result = match download_image(&client, &download_url, &dest).await {
-                    Ok(()) => {
-                        let count = downloaded.fetch_add(1, Ordering::Relaxed) + 1;
-                        pb.inc(1);
-                        pb.set_message(format!("{name}: {count}/{total} images"));
-                        None
-                    }
-                    Err(e) => {
-                        pb.inc(1);
-                        pb.println(format!("  Warning: failed to download {filename}: {e:#}"));
-                        Some((download_url, dest, filename))
-                    }
-                };
-
-                sleep(Duration::from_millis(delay_ms)).await;
-                drop(permit);
-                result
-            });
-        }
-
-        while let Some(result) = img_set.join_next().await {
-            match result {
-                Ok(Some(failed)) => retry_queue.push(failed),
-                Ok(None) => {}
-                Err(e) => pb.println(format!("  Warning: image task panicked: {e}")),
+            match download_with_retry(&client, &download_url, &dest).await {
+                Ok(()) => {
+                    let count = downloaded.fetch_add(1, Ordering::Relaxed) + 1;
+                    pb.inc(1);
+                    pb.set_message(format!("{name}: {count}/{total} images"));
+                }
+                Err(e) => {
+                    pb.inc(1);
+                    pb.println(format!("  Error: failed to download {filename}: {e:#}"));
+                }
             }
-        }
 
-        pending = std::mem::take(&mut retry_queue);
+            sleep(Duration::from_millis(delay_ms)).await;
+            drop(permit);
+        });
     }
 
-    // Log any still-failed downloads after retry
-    for (url, _, filename) in &pending {
-        pb.println(format!("  Error: permanently failed to download {filename} ({url})"));
+    while let Some(result) = img_set.join_next().await {
+        if let Err(e) = result {
+            pb.println(format!("  Warning: image task panicked: {e}"));
+        }
     }
 
     let final_count = downloaded.load(Ordering::Relaxed);
